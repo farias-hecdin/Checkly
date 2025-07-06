@@ -1,6 +1,31 @@
 local M = {}
 
---- Calcular el tiempo transcurrido desde un momento dado y lo muestra en el buffer.
+-- Cambiar las letras con tilde por una sin tilde.
+-- @return
+local ACCENT_MAP = {
+  ["Á"] = "A", ["á"] = "a",
+  ["É"] = "E", ["é"] = "e",
+  ["Í"] = "I", ["í"] = "i",
+  ["Ó"] = "O", ["ó"] = "o",
+  ["Ú"] = "U", ["ú"] = "u",
+  ["Ñ"] = "N", ["ñ"] = "n",
+}
+
+function M.normal_letters(text)
+  return (text:gsub("[%z\1-\127\194-\244][\128-\191]*", function(char)
+    return ACCENT_MAP[char] or char
+  end))
+end
+
+
+--- Normalizar el estido del texto
+function M.sanitized_text(raw)
+  local text = M.normal_letters(raw)
+  return text:lower():gsub("^%l", string.upper)
+end
+
+
+--- Calcular el tiempo transcurrido desde un momento dado y mostrarlo en el buffer.
 function M.time_elapsed(start_time)
   local end_time = os.clock()
   local elapsed_time = end_time - start_time
@@ -14,7 +39,7 @@ function M.time_elapsed(start_time)
 end
 
 
---- Leer el contenido de un archivo YAML desde una ruta dada.
+--- Leer el contenido de un archivo YAML y retornar su contenido
 function M.readYaml(path)
   local open_file = io.open(path, "r")
   if open_file then
@@ -29,7 +54,8 @@ function M.readYaml(path)
 end
 
 
---- Extraer el nombre del archivo de una ruta
+--- Extraer el nombre del archivo de una ruta de archivo
+-- @return string
 function M.processString(path)
   -- Dividir la ruta en varias partes
   local split_path = {}
@@ -37,18 +63,37 @@ function M.processString(path)
     table.insert(split_path, part)
   end
   -- Tomar la ultima parte y remover "-", el keyword (ej. watch) y la extension
-  local last_part = #split_path
-  return split_path[#last_part]:gsub("-", " "):gsub("^%l", string.upper):gsub("%.%w+%.md", "")
+  return split_path[#split_path]:gsub("-", " "):gsub("%.%w+%.md", "")
 end
 
 
---- Acortar el texto dado
-function M.truncate(text, max_len)
+-- Acortar el texto dado
+-- @return (string)
+function M.truncate_text(text, max_len)
   if #text > max_len then
     return string.sub(text, 1, max_len - 3) .. "…"
   else
     return text
   end
+end
+
+
+-- Buscar archivos `.watch.md` en un directorio dado.
+-- @return (table)
+function M.find_files(dir)
+  local found_files = {}
+  local ok, dir_iterator = pcall(vim.fs.dir, dir)
+  if not ok then
+    return found_files
+  end
+  -- Iterar sobre el contenido del directorio.
+  for filename, filetype in dir_iterator do
+    if filetype == 'file' and filename:match("%.watch%.md$") then
+      local full_path = vim.fs.joinpath(dir, filename)
+      table.insert(found_files, full_path)
+    end
+  end
+  return found_files
 end
 
 return M
