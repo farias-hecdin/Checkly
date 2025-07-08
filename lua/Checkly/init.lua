@@ -143,14 +143,15 @@ function M.process_tasks(base_dir)
         file_total_tasks = file_total_tasks + task.total
       end
 
-      table.insert(results_for_table, {
-        title = string.format("`%d: %s`", i, task_title),
-        tasks = tasks_in_file,
-        path = task_files.relative[i]
-      })
       grand_total_checked = grand_total_checked + file_total_checked
       grand_total_tasks = grand_total_tasks + file_total_tasks
     end
+
+    table.insert(results_for_table, {
+      title = string.format("`%d: %s`", i, task_title),
+      tasks = tasks_in_file,
+      path = task_files.relative[i]
+    })
   end
 
   -- Generar el informe a partir de los resultados compilados.
