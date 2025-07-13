@@ -3,32 +3,31 @@ local utils = require("Checkly.utils")
 local output = require("Checkly.output")
 local config = require("Checkly.config")
 local yaml = require("vendor.YAMLParserLite")
-local log = require("vendor.log").info
 
 local PATTERNS = {
-  -- Captura el nombre del objetivo, línea de inicio y línea de fin.
+  -- Capturar el titulo, la línea de inicio y la línea de fin
   capture_tag = "checkly: %(([%w%s%*]+), ([%d%*]+), ([%d%*]+)%)",
-  -- Usado para encontrar el final de un rango cuando end_line es '*'.
-  SIMPLE_TAG = "checkly: %(",
-  -- Patrones para contar checkboxes en una línea.
-  UNCHECKED_BOX = "^%s*-%s*%[%s%]",
-  CHECKED_BOX = "^%s*-%s*%[%S%]",
-  -- Patrón para extraer el nombre del objetivo de un encabezado Markdown.
-  HEADER_TEXT = "^#+%s+(.+)",
+  -- Encontrar el final de un rango cuando end_line es '*'
+  simple_tag = "checkly: %(",
+  -- Contar los checkboxes en una línea
+  unchecked_box = "^%s*-%s*%[%s%]",
+  checked_box = "^%s*-%s*%[%S%]",
+  -- Encontrar el titulo cuando titulo es '*'
+  header_text = "^#+%s+(.+)",
 }
 
--- Carga y parsea el archivo de configuración 'checkly.yaml'.
--- Acumula las rutas de todos los archivos de tareas especificados en el config.
--- @param base_dir (string) Directorio base donde buscar 'checkly.yaml'.
--- @return (table|nil) Tabla con rutas de archivos de tareas.
--- @return (string|nil) Directorio del archivo de configuración.
+
+--- Cargar el archivo `checkly.yaml` y pasear sus datos
+--- @param base_dir (string) Directorio a buscar 'checkly.yaml'
+--- @return (table|nil) Tabla con las rutas de las tareas en (1) absolutas y (2) relativas
 local function load_and_parse_config(base_dir)
-  local config_path = vim.fs.joinpath(base_dir, 'checkly.yaml')
+  local config_path = vim.fs.joinpath(base_dir, 'checkly.yaml' or ".checkly.yaml")
   if not vim.fn.filereadable(config_path) then
     vim.notify("Error: 'checkly.yaml' no encontrado en " .. base_dir, vim.log.levels.ERROR)
     return nil
   end
 
+  -- Pasear el archivo YAML
   local yaml_content = utils.readYaml(config_path)
   local yaml_data = yaml.parse(yaml_content)
 
@@ -37,6 +36,7 @@ local function load_and_parse_config(base_dir)
     return nil
   end
 
+  -- Buscar las archivos ".watch.md"
   local config_dir = vim.fn.fnamemodify(config_path, ':p:h')
   local task_files = {
     absolute = {},
@@ -44,23 +44,24 @@ local function load_and_parse_config(base_dir)
   }
 
   for _, path_pattern in ipairs(yaml_data.dirs) do
-    local files_in_path = utils.find_files(path_pattern)
-    if type(files_in_path) == 'table' then
+    local search_dir = vim.fs.joinpath(config_dir, path_pattern)
+    local files_in_path = utils.find_watch_files(search_dir, '%.watch%.md$')
+    if type(files_in_path) == 'table' and #files_in_path > 0 then
       for _, file_path in ipairs(files_in_path) do
-        table.insert(task_files.absolute, vim.fs.joinpath(config_dir, file_path))
-        table.insert(task_files.relative, vim.fs.joinpath(".", file_path))
+        table.insert(task_files.absolute, file_path)
+        table.insert(task_files.relative, vim.fn.fnamemodify(file_path, ':.'))
       end
     end
   end
 
-  return task_files, config_dir
+  return task_files
 end
 
 
--- Procesar un archivo de tareas, buscando etiquetas 'checkly' y contando checkboxes.
--- @param task_path (string) Ruta completa al archivo.
--- @return (table) Lista de resultados encontrados.
--- @return (string) Título del archivo.
+--- Procesar un archivo, buscando etiquetas 'checkly' y contando checkboxes.
+--- @param task_path (string) Ruta completa al archivo.
+--- @return (table) Lista de resultados encontrados.
+--- @return (string) Título del archivo.
 local function process_task_file(task_path)
   local file_results = {}
   local lines = vim.fn.readfile(task_path)
@@ -79,7 +80,7 @@ local function process_task_file(task_path)
       -- Buscar la próxima etiqueta o el final del archivo para delimitar el rango.
       if end_line_str == "*" then
         for j = i + 1, #lines do
-          if lines[j]:match(PATTERNS.SIMPLE_TAG) or j == #lines then
+          if lines[j]:match(PATTERNS.simple_tag) or j == #lines then
             end_idx = j - 1
             break
           end
@@ -90,7 +91,7 @@ local function process_task_file(task_path)
       end
       -- Si el nombre del objetivo es '*', se intenta extraer del siguiente encabezado Markdown.
       if target_name == "*" and lines[i + 1] then
-        local header_text = lines[i + 1]:match(PATTERNS.HEADER_TEXT)
+        local header_text = lines[i + 1]:match(PATTERNS.header_text)
         if header_text then
           target_name = header_text:gsub(config.options.sub[1], config.options.sub[2])
         end
@@ -103,9 +104,9 @@ local function process_task_file(task_path)
       if start_idx >= 0 and end_idx < #lines then
         for y = start_idx, end_idx do
           local target_line = lines[y]
-          if target_line:match(PATTERNS.UNCHECKED_BOX) then
+          if target_line:match(PATTERNS.unchecked_box) then
             total_in_range = total_in_range + 1
-          elseif target_line:match(PATTERNS.CHECKED_BOX) then
+          elseif target_line:match(PATTERNS.checked_box) then
             total_in_range = total_in_range + 1
             checked_in_range = checked_in_range + 1
           end
@@ -127,7 +128,9 @@ end
 -- @param base_dir (string) El directorio desde donde iniciar la búsqueda del config.
 function M.process_tasks(base_dir)
   local task_files = load_and_parse_config(base_dir)
-  if not task_files then return end
+  if not task_files then
+    return
+  end
 
   local results_for_table = {}
   local grand_total_checked, grand_total_tasks = 0, 0
@@ -148,7 +151,7 @@ function M.process_tasks(base_dir)
     end
 
     table.insert(results_for_table, {
-      title = string.format("`%d: %s`", i, task_title),
+      title = string.format("%d: %s", i, task_title),
       tasks = tasks_in_file,
       path = task_files.relative[i]
     })

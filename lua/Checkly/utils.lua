@@ -1,7 +1,7 @@
 local M = {}
+local clog = require("vendor.log").info
 
--- Cambiar las letras con tilde por una sin tilde.
--- @return
+--- Cambiar las letras con tilde por una sin tilde.
 local ACCENT_MAP = {
   ["Á"] = "A", ["á"] = "a",
   ["É"] = "E", ["é"] = "e",
@@ -11,6 +11,8 @@ local ACCENT_MAP = {
   ["Ñ"] = "N", ["ñ"] = "n",
 }
 
+--- @param text (string) Texto a corregir
+--- @return (string)
 function M.normal_letters(text)
   return (text:gsub("[%z\1-\127\194-\244][\128-\191]*", function(char)
     return ACCENT_MAP[char] or char
@@ -78,7 +80,6 @@ function M.truncate_text(text, max_len)
 end
 
 
--- Buscar archivos `.watch.md` en un directorio dado.
 -- @return (table)
 function M.find_files(dir)
   local found_files = {}
@@ -94,6 +95,42 @@ function M.find_files(dir)
     end
   end
   return found_files
+end
+
+
+--- Busca archivos en `start_dir`. Si no los encuentra, se sube un nivel y lo reintenta.
+--- @param start_dir (string) Directorio inicial.
+--- @param max_up? (number) Máximo de directorios hacia arriba. Por defecto 10.
+--- @return (table) Lista de rutas absolutas.
+function M.find_watch_files(start_dir, pattern, max_up)
+  local found = {}
+  max_up = max_up or 10
+  local current = vim.fn.fnamemodify(start_dir or vim.loop.cwd(), ':p')
+
+  for _ = 0, max_up do
+    -- Itera sobre el directorio actual
+    local ok, dir_iter = pcall(vim.fs.dir, current)
+    if ok then
+      for name, typ in dir_iter do
+        if typ == 'file' and name:match(pattern) then
+          local fpath = vim.fn.fnamemodify(vim.fs.joinpath(current, name), ':p')
+          table.insert(found, fpath)
+        end
+      end
+    end
+    if #found > 0 then
+      return found
+    end
+    -- Si no se encontraron archivos, sube al directorio padre
+    local parent = vim.fs.dirname(current)
+    -- Detiene la búsqueda si llegamos al directorio raíz
+    if parent == current then
+      break
+    end
+    current = parent
+  end
+
+  return found
 end
 
 return M
