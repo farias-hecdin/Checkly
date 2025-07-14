@@ -2,7 +2,7 @@ local M = {}
 local utils = require("Checkly.utils")
 local output = require("Checkly.output")
 local config = require("Checkly.config")
-local yaml = require("vendor.YAMLParserLite")
+local fops = require("Checkly.file_ops")
 
 local PATTERNS = {
   -- Capturar el titulo, la línea de inicio y la línea de fin
@@ -16,56 +16,16 @@ local PATTERNS = {
   header_text = "^#+%s+(.+)",
 }
 
-
---- Cargar el archivo `checkly.yaml` y pasear sus datos
---- @param base_dir (string) Directorio a buscar 'checkly.yaml'
---- @return (table|nil) Tabla con las rutas de las tareas en (1) absolutas y (2) relativas
-local function load_and_parse_config(base_dir)
-  local config_path = vim.fs.joinpath(base_dir, 'checkly.yaml' or ".checkly.yaml")
-  if not vim.fn.filereadable(config_path) then
-    vim.notify("Error: 'checkly.yaml' no encontrado en " .. base_dir, vim.log.levels.ERROR)
-    return nil
-  end
-
-  -- Pasear el archivo YAML
-  local yaml_content = utils.readYaml(config_path)
-  local yaml_data = yaml.parse(yaml_content)
-
-  if type(yaml_data) ~= 'table' or not yaml_data.dirs then
-    vim.notify("Error: 'checkly.yaml' es inválido o no contiene la clave 'dirs'.", vim.log.levels.ERROR)
-    return nil
-  end
-
-  -- Buscar las archivos ".watch.md"
-  local config_dir = vim.fn.fnamemodify(config_path, ':p:h')
-  local task_files = {
-    absolute = {},
-    relative = {}
-  }
-
-  for _, path_pattern in ipairs(yaml_data.dirs) do
-    local search_dir = vim.fs.joinpath(config_dir, path_pattern)
-    local files_in_path = utils.find_watch_files(search_dir, '%.watch%.md$')
-    if type(files_in_path) == 'table' and #files_in_path > 0 then
-      for _, file_path in ipairs(files_in_path) do
-        table.insert(task_files.absolute, file_path)
-        table.insert(task_files.relative, vim.fn.fnamemodify(file_path, ':.'))
-      end
-    end
-  end
-
-  return task_files
-end
-
-
---- Procesar un archivo, buscando etiquetas 'checkly' y contando checkboxes.
---- @param task_path (string) Ruta completa al archivo.
---- @return (table) Lista de resultados encontrados.
---- @return (string) Título del archivo.
+--- Procesar un archivo, buscando etiquetas 'checkly' y contando checkboxes
+--- @param task_path (string) Ruta completa al archivo
+--- @return (table) Lista de resultados encontrados
+--- @return (string) Título del archivo
 local function process_task_file(task_path)
   local file_results = {}
   local lines = vim.fn.readfile(task_path)
-  if not lines then return {}, "" end
+  if not lines then
+    return {}, ""
+  end
 
   local task_title =  utils.processString(vim.fn.fnamemodify(task_path, ':t'))
   task_title = utils.sanitized_text(task_title)
@@ -73,11 +33,11 @@ local function process_task_file(task_path)
   for i, line in ipairs(lines) do
     local target_name, start_line_str, end_line_str = line:match(PATTERNS.capture_tag)
 
-    -- Si no se encuentra una etiqueta, se salta a la siguiente línea.
+    -- Si no se encuentra una etiqueta, saltar a la siguiente línea
     if target_name then
       local start_idx = (start_line_str == "*") and (i - 1) or (tonumber(start_line_str) - 1)
       local end_idx
-      -- Buscar la próxima etiqueta o el final del archivo para delimitar el rango.
+      -- Buscar la próxima etiqueta o el final del archivo para delimitar el rango
       if end_line_str == "*" then
         for j = i + 1, #lines do
           if lines[j]:match(PATTERNS.simple_tag) or j == #lines then
@@ -89,14 +49,13 @@ local function process_task_file(task_path)
       else
         end_idx = tonumber(end_line_str) - 1
       end
-      -- Si el nombre del objetivo es '*', se intenta extraer del siguiente encabezado Markdown.
+      -- Si el nombre del objetivo es '*', extraer el siguiente encabezado Markdown
       if target_name == "*" and lines[i + 1] then
         local header_text = lines[i + 1]:match(PATTERNS.header_text)
         if header_text then
-          target_name = header_text:gsub(config.options.sub[1], config.options.sub[2])
+          target_name = header_text:gsub(config.options.title_replace[1], config.options.title_replace[2])
         end
       end
-
       target_name = utils.sanitized_text(target_name)
 
       local checked_in_range, total_in_range = 0, 0
@@ -115,7 +74,7 @@ local function process_task_file(task_path)
         table.insert(file_results, {
           name = "- " .. target_name,
           checked = checked_in_range,
-          total = total_in_range,
+          total = total_in_range
         })
       end
     end
@@ -124,10 +83,10 @@ local function process_task_file(task_path)
 end
 
 
--- Función principal: Orquesta la carga, procesamiento y generación del informe.
--- @param base_dir (string) El directorio desde donde iniciar la búsqueda del config.
+-- Orquestar la carga, procesamiento y generación del reporte
+-- @param base_dir (string) Directorio donde búscar `checkly.yml`
 function M.process_tasks(base_dir)
-  local task_files = load_and_parse_config(base_dir)
+  local task_files = fops.load_and_parse_config(base_dir)
   if not task_files then
     return
   end
@@ -157,49 +116,53 @@ function M.process_tasks(base_dir)
     })
   end
 
-  -- Generar el informe a partir de los resultados compilados.
-  local grand_totals = { checked = grand_total_checked, total = grand_total_tasks }
+  -- Generar el reporte a partir de los datos obtenidos
+  local grand_totals = {checked = grand_total_checked, total = grand_total_tasks}
   local output_lines = output.generate_report_lines(results_for_table, grand_totals)
 
-  -- Insertar las líneas generadas en el buffer actual.
+  -- Insertar las líneas generadas en el buffer actual
   local cursor_pos = vim.api.nvim_win_get_cursor(0)
   local row = cursor_pos[1] - 1
   vim.api.nvim_buf_set_lines(0, row, row, false, output_lines)
 end
 
 
+--- Inicializar el plugin
+--- @param opts? (table)
 function M.run(opts)
   opts = opts or {}
   local base_dir = (opts.fargs and opts.fargs[1]) or vim.fn.getcwd()
 
   local current_file = vim.fn.fnamemodify(vim.fn.expand('%'), ':t')
-  local target_file = config.options.target_file
+  local target_file = config.options.target_file .. ".md"
 
   if current_file:lower() == target_file:lower() then
     -- Borrar todo el texto del buffer actual
     vim.api.nvim_buf_set_lines(0, 0, -1, false, {})
     -- Cronometrar la ejecucion del script
     local start_time = os.clock()
+
     -- Ejecutar Checkly
     M.process_tasks(base_dir)
     -- Determinar el tiempo de ejecucion
     utils.time_elapsed(start_time)
   else
-    local message = string.format("Advertencia: No estás en el archivo '%s'", target_file)
-    vim.notify(message, vim.log.levels.WARN)
+    utils.notify("You are not in the file: " .. target_file, "warn")
   end
 end
 
 
-function M.setup(_)
-  local keymap_opts = {noremap = true, silent = true, desc = "Ejecutar Checkly"}
+--- Ajustes iniciales del plugin
+M.setup = function(options)
+  config.options = vim.tbl_deep_extend("keep", options or {}, config.options)
+  local keymap_opts = {noremap = true, silent = true, desc = "Run Checkly"}
   vim.keymap.set('n', '<leader>Cy', function() M.run() end, keymap_opts)
 end
 
 
--- Create the user command :Checkly
+--- Crear el commando :Checkly
 vim.api.nvim_create_user_command('Checkly', M.run,
-  {nargs = '?', complete = 'dir', desc = 'Analiza los directorios de checkly.yml y muestra el progreso de las tareas.'}
+  {nargs = '?', complete = 'dir', desc = 'Analyze checkly directories and show task progress.'}
 )
 
 return M
